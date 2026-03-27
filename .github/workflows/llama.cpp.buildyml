@@ -1,0 +1,48 @@
+name: Build llama.cpp TurboQuant (CUDA T4)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-cuda:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          cuda: '12.4.0'
+          method: network
+
+      - name: Build llama.cpp (CUDA sm_75 for T4)
+        run: |
+          cmake -B build \
+            -DGGML_CUDA=ON \
+            -DCMAKE_CUDA_ARCHITECTURES=75 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLAMA_CURL=OFF
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist
+          cp build/bin/llama-server dist/
+          cp build/bin/llama-cli dist/
+          cp build/bin/llama-quantize dist/
+          tar czf llama-turboquant-cuda-t4.tar.gz -C dist .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-turboquant-cuda-t4
+          path: llama-turboquant-cuda-t4.tar.gz
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: llama-turboquant-cuda-t4.tar.gz
