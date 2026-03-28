@@ -1,0 +1,96 @@
+name: Build llama-cpp-turboquant
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout (for workflow + release tag)
+        uses: actions/checkout@v4
+
+      - name: Install CUDA toolkit
+        uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          cuda: '12.4.0'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart-dev", "cublas-dev"]'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential patchelf
+
+      - name: Clone turboquant
+        run: |
+          git clone https://github.com/TheTom/llama-cpp-turboquant.git
+          cd llama-cpp-turboquant
+          git checkout feature/turboquant-kv-cache
+          echo "COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          cd llama-cpp-turboquant
+          cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON
+          cmake --build build -j"$(nproc)"
+
+      - name: Package artifacts
+        run: |
+          cd llama-cpp-turboquant
+          mkdir -p package/bin package/lib
+
+          # Copy executables
+          find build/bin -type f -executable -exec cp {} package/bin/ \; 2>/dev/null || true
+          find build -maxdepth 1 -type f -executable -exec cp {} package/bin/ \; 2>/dev/null || true
+
+          # Copy project shared libs
+          find build -name '*.so*' -exec cp -a {} package/lib/ \; 2>/dev/null || true
+
+          # Bundle CUDA runtime libs so target machine only needs nvidia driver
+          CUDA_LIB="${CUDA_PATH}/lib64"
+          for lib in libcudart.so* libcublas.so* libcublasLt.so*; do
+            find "$CUDA_LIB" -name "$lib" -exec cp -a {} package/lib/ \; 2>/dev/null || true
+          done
+
+          # Set RPATH on all executables to look for libs in ../lib
+          find package/bin -type f -executable -exec patchelf --set-rpath '$ORIGIN/../lib' {} \; 2>/dev/null || true
+
+          # Create convenience run script
+          cat > package/run.sh << 'SCRIPT'
+          #!/usr/bin/env bash
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$DIR/bin/$@"
+          SCRIPT
+          chmod +x package/run.sh
+          # fix leading spaces from heredoc
+          sed -i 's/^          //' package/run.sh
+
+          # Summary
+          echo "=== Binaries ==="
+          ls -lh package/bin/ || echo "no binaries found"
+          echo "=== Libraries ==="
+          ls -lh package/lib/ || echo "no libraries found"
+
+          cd package
+          tar czf ../turboquant-linux-cuda12.tar.gz .
+
+      - name: Generate release tag
+        id: tag
+        run: echo "tag=build-$(date -u +'%Y%m%d-%H%M%S')" >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "turboquant ${{ steps.tag.outputs.tag }}"
+          files: llama-cpp-turboquant/turboquant-linux-cuda12.tar.gz
+          body: |
+            Automated build of `feature/turboquant-kv-cache` @ ${{ env.COMMIT }}
+            - CUDA 12.4 runtime bundled (target needs NVIDIA driver only)
+            - Ubuntu 22.04, Release build
+            - Usage: `./run.sh llama-server --model model.gguf`
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
