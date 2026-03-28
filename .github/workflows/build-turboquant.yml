@@ -6,22 +6,17 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    container:
+      image: nvidia/cuda:12.4.0-devel-ubuntu22.04
 
     steps:
-      - name: Checkout (for workflow + release tag)
-        uses: actions/checkout@v4
-
-      - name: Install CUDA toolkit
-        uses: Jimver/cuda-toolkit@v0.2.19
-        with:
-          cuda: '12.4.0'
-          method: 'network'
-          sub-packages: '["nvcc", "cudart-dev", "cublas-dev"]'
-
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential patchelf
+          apt-get update
+          apt-get install -y cmake build-essential patchelf git
+
+      - name: Checkout (for release tag)
+        uses: actions/checkout@v4
 
       - name: Clone turboquant
         run: |
@@ -49,9 +44,8 @@ jobs:
           find build -name '*.so*' -exec cp -a {} package/lib/ \; 2>/dev/null || true
 
           # Bundle CUDA runtime libs so target machine only needs nvidia driver
-          CUDA_LIB="${CUDA_PATH}/lib64"
           for lib in libcudart.so* libcublas.so* libcublasLt.so*; do
-            find "$CUDA_LIB" -name "$lib" -exec cp -a {} package/lib/ \; 2>/dev/null || true
+            find /usr/local/cuda/lib64 -name "$lib" -exec cp -a {} package/lib/ \; 2>/dev/null || true
           done
 
           # Set RPATH on all executables to look for libs in ../lib
@@ -59,14 +53,12 @@ jobs:
 
           # Create convenience run script
           cat > package/run.sh << 'SCRIPT'
-          #!/usr/bin/env bash
-          DIR="$(cd "$(dirname "$0")" && pwd)"
-          export LD_LIBRARY_PATH="$DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          exec "$DIR/bin/$@"
-          SCRIPT
+#!/usr/bin/env bash
+DIR="$(cd "$(dirname "$0")" && pwd)"
+export LD_LIBRARY_PATH="$DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$DIR/bin/$@"
+SCRIPT
           chmod +x package/run.sh
-          # fix leading spaces from heredoc
-          sed -i 's/^          //' package/run.sh
 
           # Summary
           echo "=== Binaries ==="
