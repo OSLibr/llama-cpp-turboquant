@@ -52,12 +52,7 @@ jobs:
           find package/bin -type f -executable -exec patchelf --set-rpath '$ORIGIN/../lib' {} \; 2>/dev/null || true
 
           # Create convenience run script
-          cat > package/run.sh << 'SCRIPT'
-#!/usr/bin/env bash
-DIR="$(cd "$(dirname "$0")" && pwd)"
-export LD_LIBRARY_PATH="$DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-exec "$DIR/bin/$@"
-SCRIPT
+          printf '#!/usr/bin/env bash\nDIR="$(cd "$(dirname "$0")" && pwd)"\nexport LD_LIBRARY_PATH="$DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexec "$DIR/bin/$@"\n' > package/run.sh
           chmod +x package/run.sh
 
           # Summary
